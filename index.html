@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Word Trace Game</title>
+<style>
+  :root{
+    --bg: #5b2c6f;
+    --panel: #e9d5f7;
+    --tile: #ffd54f;
+    --muted: rgba(255,255,255,0.9);
+    --card: #ffffff;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    font-family:Inter,system-ui,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--muted);
+    display:flex;
+    justify-content:center;
+    padding:14px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .app{
+    width:100%;
+    max-width:520px;
+    display:flex;
+    flex-direction:column;
+    min-height:100vh;
+    gap:8px;
+  }
+
+  header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:12px; background:linear-gradient(90deg,#ffd76b,#ffb86b);
+    color:#1f1f1f; border-radius:10px;
+  }
+  header h1{ margin:0; font-size:18px; letter-spacing:0.2px }
+  .meta { font-weight:700; }
+
+  main{ display:flex; flex-direction:column; gap:8px; }
+
+  /* answers / words */
+  #answers { display:flex; flex-direction:column; gap:10px; padding:6px; }
+  .word-row { display:flex; gap:8px; justify-content:center; align-items:center; }
+  .slot { min-width:40px; height:40px; border-radius:8px; background:var(--tile); color:#1a1a1a; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:16px; }
+  .slot.empty { background:var(--card); color:var(--bg); border:1px dashed rgba(0,0,0,0.06); }
+  .word-label { font-size:12px; opacity:0.9; margin-right:6px; min-width:6px; text-align:right; color:#fff; }
+
+  /* message */
+  #message { height:36px; display:flex; align-items:center; justify-content:center; font-weight:800; color:#fff; }
+
+  /* play area */
+  .play-area {
+    display: flex;
+    justify-content: flex-end;   /* Move circle to RIGHT */
+    margin-top: 40px;
+    padding-right: 30px;         /* Optional: add spacing from right edge */
+}
+
+  .circle {
+    width:86%;
+    max-width:420px;
+    aspect-ratio:1/1;
+    margin-right: 5px;
+    background:var(--panel);
+    border-radius:50%;
+    position:relative;
+    box-shadow: 0 18px 40px rgba(0,0,0,0.18);
+    user-select:none;
+    touch-action:none;
+  }
+  .letter {
+    position:absolute;
+    width:64px; height:64px;
+    border-radius:50%;
+    background:var(--card);
+    color:#222;
+    display:flex; align-items:center; justify-content:center;
+    font-weight:900; font-size:22px;
+    box-shadow:0 8px 18px rgba(0,0,0,0.14);
+    pointer-events:auto; touch-action:none;
+  }
+  .letter.selected { transform:scale(1.06); box-shadow:0 14px 32px rgba(0,0,0,0.22); }
+
+  /* controls */
+  .controls { display:flex; gap:10px; justify-content:center; padding:12px; }
+  .btn { padding:10px 14px; border-radius:10px; border:none; cursor:pointer; font-weight:800; }
+  .btn.secondary { background:#fff; color:#222; }
+  .btn.primary { background:linear-gradient(90deg,#ffd76b,#ffb86b); color:#222; }
+
+  footer { text-align:center; color:rgba(255,255,255,0.9); padding:8px; font-size:13px; margin-top:auto; }
+
+  @media(max-width:420px){
+    .letter { width:54px; height:54px; font-size:20px }
+    .slot { min-width:34px; height:34px; font-size:14px }
+  }
+</style>
+</head>
+<body>
+  <div class="app" id="app">
+    <header>
+      <h1 id="title">Word Trace — Level 1</h1>
+      <div class="meta">Score: <span id="score">0</span> • Found: <span id="foundCount">0</span>/<span id="totalCount">0</span></div>
+    </header>
+
+    <main>
+      <div id="answers" aria-live="polite"></div>
+      <div id="message" aria-live="assertive"></div>
+
+      <div class="play-area">
+        <div class="circle" id="circle" role="application" aria-label="letter circle"></div>
+      </div>
+
+      <div class="controls">
+        <button id="shuffleBtn" class="btn secondary">Shuffle</button>
+        <button id="clearBtn" class="btn secondary">Clear</button>
+      </div>
+    </main>
+
+    <footer>Slide your finger over letters to form words — release to submit</footer>
+  </div>
+
+  <!-- audio (place in sounds/ folder) -->
+  <audio id="audioSuccess" src="sounds/wrongsound.wav" preload="auto"></audio>
+  <audio id="audioWrong" src="sounds/successsound.wav" preload="auto"></audio>
+  <audio id="audioLevelComplete" src="sounds/levelsound.wav" preload="auto"></audio>
+
+<script>
+/* -------------------------
+   MAGNETIC SLIDE-OVER WORD GAME
+   Mobile-first (pointer + touch)
+   10 levels, 5-6 words each
+   -------------------------*/
+
+/* === Levels: 10 rounds, each 5-6 words (increase difficulty) ===
+   You can replace words/letters as you like.
+   Each level.entry: { letters: [...], words: [...] }
+   Words must be constructible from the provided letters and use letters' instances once.
+*/
+// const LEVELS = [
+//   { letters:["R","E","S","T","A","H","P","M","J","U"], words:["RUPA", "TAJ", "SAM", "HEMA"] },            // classmates style (example names)
+//   { letters:["L","O","N","D","O","N"], words:["LONDON","ON","NO","DON","NOD","LOON"] },        // cities
+//   { letters:["A","P","P","L","E","S"], words:["APPLE","PEAL","PAL","APE","PEAS","SALE"] },     // fruits
+//   { letters:["C","O","D","E","R","S"], words:["CODE","CODER","RED","RODS","SCORE","DOER"] },   // technical
+//   { letters:["J","A","V","A","S","C"], words:["JAVA","SCAV","JAVAS","CAVA","VASA","CASA"] },    // tech (example)
+//   { letters:["H","T","M","L","C","S"], words:["HTML","CSS","MATH","CLASH","LATCH","SCAL"] },   // web/tech
+//   { letters:["T","E","C","H","N","O"], words:["TECH","NOTE","HONE","CONE","THEN","ONE"] },     // mixed
+//   { letters:["S","T","R","E","A","M"], words:["STREAM","TEAM","SEAM","RATE","MATE","EAST"] },  // larger
+//   { letters:["D","A","T","A","B","S"], words:["DATA","BATS","TAB","BAD","SAT","ABAS"] },       // data words
+//   { letters:["A","L","G","O","R","I","T","H","M"], words:["ALGORITHM","MATH","THROG","LOG","RAT","HIT"] } // advanced (extra letters allowed)
+// ];
+const LEVELS = [
+
+  { letters:["R","E","S","T","A","H","P","M","J","U"], words:["RUPA", "TAJ","RAM","RAJU", "SAM", "HEMA"] },  
+  {letters:["I","E","D","H","P","R","S","L","I","A","U","B","N"],words:["INDIA","PARIS","DELHI","DUBAI"]},
+  {letters:["A","P","A","E","M","N","G","O","V","W","B","U","R"],words:["MANGO","GRAPE","GUAVA"]},
+  { letters:["C","O","D","I","N","G","S","E"], words:["CODE","CODING","SING","ICON","SONG"] },
+  { letters:["L","A","P","T","O","P","S"], words:["LAPTOP","STOP","PLOT","LOST","TAPS","SLOT"] },
+  { letters:["P","Y","T","H","O","N","S"], words:["PYTHON","TONS","SHOT","POTS"] },
+  { letters:["C","A","M","P","U","S"], words:["CAMPUS","MAPS","CAMS","SCAM","SUM","CAP"] },
+  { letters:["W","E","A","T","H","R","S","E"], words:["WEATHER","HEAT","WARS","STAR","EAST","HEAR"] },
+  { letters:["D","A","N","G","E","R","S"], words:["DANGER","RANGED","GEAR","AGED","SAND","SEND"] },
+  { letters:["M","A","G","N","E","T","O"], words:["MAGNET","MEGA","GATE","NOTE"] }
+];
+
+
+
+/* === Game state === */
+let currentLevel = 0;
+let letters = [];        // displayed letter tiles array (characters)
+let validWords = [];     // words for current level (uppercase)
+let solved = new Set();  // solved words
+let tracedIndices = [];  // indices touched in current gesture
+let selectedSet = new Set(); // selected indices set for quick check
+let score = 0;
+
+/* === DOM refs === */
+const $title = document.getElementById('title');
+const $score = document.getElementById('score');
+const $foundCount = document.getElementById('foundCount');
+const $totalCount = document.getElementById('totalCount');
+const $answers = document.getElementById('answers');
+const $circle = document.getElementById('circle');
+const $message = document.getElementById('message');
+const $shuffleBtn = document.getElementById('shuffleBtn');
+const $clearBtn = document.getElementById('clearBtn');
+
+const audioSuccess = document.getElementById('audioSuccess');
+const audioWrong = document.getElementById('audioWrong');
+const audioLevelComplete = document.getElementById('audioLevelComplete');
+
+/* === Utilities === */
+function randInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+function shuffleArray(arr){ for(let i=arr.length-1;i>0;i--){ const j = Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } }
+function uppercaseArray(arr){ return arr.map(x => String(x).toUpperCase()); }
+
+/* === Level setup === */
+function startLevel(levelIdx){
+  currentLevel = levelIdx;
+  const L = LEVELS[currentLevel];
+  letters = uppercaseArray(L.letters.slice()); // copy
+  validWords = uppercaseArray(L.words.slice());
+  solved = new Set();
+  tracedIndices = [];
+  selectedSet.clear();
+  $title.textContent = `Word Trace — Level ${currentLevel+1}`;
+  $score.textContent = String(score);
+  renderAnswerGrid();
+  placeLetters();
+  showMessage('');
+}
+
+/* render answer boxes (empty or filled for solved words) */
+function renderAnswerGrid(){
+  $answers.innerHTML = '';
+  validWords.forEach(w => {
+    const row = document.createElement('div');
+    row.className = 'word-row';
+    // optional label could be here if you want to show length
+    for(let i=0;i<w.length;i++){
+      const s = document.createElement('div');
+      s.className = solved.has(w) ? 'slot' : 'slot empty';
+      s.textContent = solved.has(w) ? w[i] : '';
+      row.appendChild(s);
+    }
+    $answers.appendChild(row);
+  });
+  $foundCount.textContent = String(solved.size);
+  $totalCount.textContent = String(validWords.length);
+}
+
+/* position the letters around the circle */
+function placeLetters(){
+  $circle.innerHTML = '';
+  const diameter = Math.min($circle.clientWidth, $circle.clientHeight);
+  const R = diameter/2 - 56; // radius for centers
+  const cx = $circle.clientWidth/2;
+  const cy = $circle.clientHeight/2;
+  const step = (2*Math.PI) / Math.max(letters.length,1);
+  letters.forEach((ch, idx) => {
+    const angle = idx * step - Math.PI/2;
+    const x = Math.round(cx + R * Math.cos(angle) - 32);
+    const y = Math.round(cy + R * Math.sin(angle) - 32);
+    const el = document.createElement('button');
+    el.className = 'letter';
+    el.textContent = ch;
+    el.dataset.idx = String(idx);
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    // prevent default gestures
+    el.addEventListener('touchstart', e => e.preventDefault(), {passive:false});
+    $circle.appendChild(el);
+  });
+  highlightSelectedVisual();
+}
+
+/* show message */
+function showMessage(txt, ms=900){
+  $message.textContent = txt;
+  if(ms>0 && txt) setTimeout(()=>{ if($message.textContent===txt) $message.textContent=''; }, ms);
+}
+
+/* highlight selected indices visually and show current traced word */
+function highlightSelectedVisual(){
+  document.querySelectorAll('.letter').forEach(el=>{
+    const idx = Number(el.dataset.idx);
+    if(selectedSet.has(idx)) el.classList.add('selected'); else el.classList.remove('selected');
+  });
+  $message.textContent = tracedIndices.map(i => letters[i]).join('');
+}
+
+/* === Tracing logic (magnetic slide-over) ===
+   - User touches/pointerdown inside circle to start
+   - When pointer moves, we detect elementFromPoint and if it's a letter, we add it
+   - On pointerup (or touchend) we evaluate the traced word
+*/
+let isTracing = false;
+
+/* start gesture */
+function gestureStart(e){
+  // only primary pointers
+  try{ if(e.pointerType === 'mouse' && e.button !== 0) return; }catch(_){}
+  isTracing = true;
+  tracedIndices = [];
+  selectedSet.clear();
+  handleTraceMove(e);
+  // prevent scrolling
+  if(e.cancelable) e.preventDefault();
+}
+
+/* move */
+function gestureMove(e){
+  if(!isTracing) return;
+  handleTraceMove(e);
+  if(e.cancelable) e.preventDefault();
+}
+
+/* end */
+function gestureEnd(e){
+  if(!isTracing) return;
+  isTracing = false;
+  evaluateTracedWord();
+}
+
+/* map event to client point and check letter under finger */
+function handleTraceMove(e){
+  const pt = getClientPointFromEvent(e);
+  if(!pt) return;
+  const node = document.elementFromPoint(pt.clientX, pt.clientY);
+  if(!node) return;
+  const letterEl = node.closest ? node.closest('.letter') : null;
+  if(!letterEl) return;
+  const idx = Number(letterEl.dataset.idx);
+  if(Number.isNaN(idx)) return;
+  addIndexIfNew(idx);
+}
+
+/* add traced index if not already added */
+function addIndexIfNew(idx){
+  if(selectedSet.has(idx)) return;
+  selectedSet.add(idx);
+  tracedIndices.push(idx);
+  highlightSelectedVisual();
+}
+
+/* get client coordinates from pointer or touch event */
+function getClientPointFromEvent(e){
+  if(e.touches && e.touches[0]) return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
+  if(e.changedTouches && e.changedTouches[0]) return { clientX: e.changedTouches[0].clientX, clientY: e.changedTouches[0].clientY };
+  if(typeof e.clientX === 'number' && typeof e.clientY === 'number') return { clientX: e.clientX, clientY: e.clientY };
+  return null;
+}
+
+/* evaluate the traced letters -> word */
+function evaluateTracedWord(){
+  const word = tracedIndices.map(i=>letters[i]).join('').toUpperCase();
+  // clear immediate selection visuals after evaluation
+  const clearSelection = () => { tracedIndices = []; selectedSet.clear(); highlightSelectedVisual(); };
+
+  if(!word){
+    clearSelection(); return;
+  }
+  if(validWords.includes(word) && !solved.has(word)){
+    solved.add(word);
+    const gained = Math.max(5, word.length * 3);
+    score += gained;
+    try{ audioSuccess.currentTime = 0; audioSuccess.play(); }catch(_){}
+    showMessage(`+${gained}  ${word}`, 900);
+    renderAnswerGrid();
+    $score.textContent = String(score);
+    // level complete?
+    if(solved.size >= validWords.length){
+      // play level complete sound and advance after short delay
+      try{ audioLevelComplete.currentTime = 0; audioLevelComplete.play(); }catch(_){}
+      showMessage('Level Complete!', 1400);
+      setTimeout(()=> {
+        // advance to next level if available
+        if(currentLevel < LEVELS.length - 1){
+          startLevel(currentLevel + 1);
+        } else {
+          showMessage('All Levels Completed 🎉', 2400);
+        }
+      }, 900);
+    }
+    clearSelection();
+  } else {
+    // wrong / already found
+    try{ audioWrong.currentTime = 0; audioWrong.play(); }catch(_){}
+    showMessage('Not valid', 700);
+    // small shake animation for answers
+    shakeAnswers();
+    setTimeout(clearSelection, 450);
+  }
+}
+
+/* small answer shake for wrong */
+function shakeAnswers(){
+  try{
+    $answers.style.transition = 'transform .12s ease';
+    $answers.style.transform = 'translateX(-8px)';
+    setTimeout(()=> $answers.style.transform = 'translateX(8px)', 120);
+    setTimeout(()=> $answers.style.transform = 'translateX(0)', 240);
+    setTimeout(()=> $answers.style.transition = '', 360);
+  }catch(e){}
+}
+
+/* === Controls: shuffle & clear === */
+$shuffleBtn.addEventListener('click', ()=> {
+  shuffleArray(letters);
+  placeLetters();
+  showMessage('Shuffled', 800);
+});
+$clearBtn.addEventListener('click', ()=> {
+  tracedIndices = []; selectedSet.clear(); highlightSelectedVisual();
+  showMessage('',0);
+});
+
+/* === Event binding for pointer + touch === */
+$circle.addEventListener('pointerdown', (ev)=>{ gestureStart(ev); });
+// pointermove/up on window so dragging outside circle still works
+window.addEventListener('pointermove', (ev)=>{ gestureMove(ev); });
+window.addEventListener('pointerup', (ev)=>{ gestureEnd(ev); });
+// also support touch events to be safe on older browsers
+$circle.addEventListener('touchstart', (ev)=>{ gestureStart(ev); }, {passive:false});
+window.addEventListener('touchmove', (ev)=>{ gestureMove(ev); }, {passive:false});
+window.addEventListener('touchend', (ev)=>{ gestureEnd(ev); });
+
+/* === Start / Level management === */
+function startLevel(levelIdx=0){
+  if(levelIdx < 0) levelIdx = 0;
+  if(levelIdx >= LEVELS.length) levelIdx = LEVELS.length - 1;
+  currentLevel = levelIdx;
+  // copy letters and words (uppercase)
+  letters = uppercaseArray(LEVELS[currentLevel].letters.slice());
+  validWords = uppercaseArray(LEVELS[currentLevel].words.slice());
+  solved = new Set();
+  tracedIndices = [];
+  selectedSet.clear();
+  $title.textContent = `Word Trace — Level ${currentLevel+1}`;
+  renderAnswerGrid();
+  placeLetters();
+  showMessage('',0);
+}
+
+/* === helper: uppercase array === */
+function uppercaseArray(arr){
+  return arr.map(s => String(s).toUpperCase());
+}
+
+/* === simple sanity: ensure words are formed from provided letters (non-strict if repeats) ===
+   (Optional) we won't block level start even if author provided inconsistent levels,
+   but validWords should be set by the developer to match letters for correct gameplay.
+*/
+
+/* === init === */
+startLevel(0);
+
+</script>
+</body>
+</html>
